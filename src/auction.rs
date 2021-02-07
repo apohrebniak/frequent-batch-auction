@@ -1,5 +1,5 @@
 use bigdecimal::BigDecimal;
-use std::cmp::Ordering;
+use std::cmp::{max, Ordering};
 use std::collections::HashMap;
 
 type Qty = u32;
@@ -55,9 +55,9 @@ pub fn calculate_batch(bids: &mut Vec<Order>, asks: &mut Vec<Order>) -> BatchRep
     });
 
     // demand curve
-    let demand = orders_to_curve_segments(&bids);
+    let mut demand = orders_to_curve_segments(&bids);
     // supply curve
-    let supply = orders_to_curve_segments(&asks);
+    let mut supply = orders_to_curve_segments(&asks);
 
     match intersect_demand_supply(&demand, &supply) {
         None => BatchReport::NoTrade,
@@ -113,21 +113,21 @@ fn clear_orders(
 fn orders_to_curve_segments(orders: &[Order]) -> Vec<Segment> {
     let mut segments: HashMap<BigDecimal, Qty> = HashMap::new();
 
+    let mut max_q = 0;
+
     for order in orders {
-        if segments.contains_key(&order.price) {
-            segments.insert(
-                order.price.clone(),
-                order.qty + segments.get(&order.price).unwrap(),
-            );
-        } else {
-            segments.insert(order.price.clone(), order.qty);
-        }
+        max_q += order.qty;
+        segments.insert(order.price.clone(), max_q);
     }
 
-    segments
+    let mut segments: Vec<Segment> = segments
         .into_iter()
         .map(|(p, q)| Segment { price: p, q_max: q })
-        .collect()
+        .collect();
+
+    segments.sort_unstable_by(|s1, s2| s1.q_max.cmp(&s2.q_max));
+
+    segments
 }
 
 /**
@@ -207,7 +207,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::auction::{intersect_demand_supply, orders_to_curve_segments, Order, Segment};
+    use crate::auction::{
+        calculate_batch, intersect_demand_supply, orders_to_curve_segments, BatchReport, Order,
+        Segment,
+    };
     use bigdecimal::{BigDecimal, FromPrimitive};
     use std::str::FromStr;
 
@@ -502,26 +505,55 @@ mod tests {
         ];
 
         let mut segments = orders_to_curve_segments(&orders);
-        segments.sort_by(|seg, other| seg.price.cmp(&other.price));
         assert_eq!(segments.len(), 3);
 
         assert_eq!(
-            segments.get(2).unwrap().price,
+            segments.get(0).unwrap().price,
             BigDecimal::from_str("111.69").unwrap()
         );
-        assert_eq!(segments.get(2).unwrap().q_max, 10);
+        assert_eq!(segments.get(0).unwrap().q_max, 10);
 
         assert_eq!(
             segments.get(1).unwrap().price,
             BigDecimal::from_str("111.00").unwrap()
         );
-        assert_eq!(segments.get(1).unwrap().q_max, 1);
+        assert_eq!(segments.get(1).unwrap().q_max, 11);
 
         assert_eq!(
-            segments.get(0).unwrap().price,
+            segments.get(2).unwrap().price,
             BigDecimal::from_str("110.97").unwrap()
         );
-        assert_eq!(segments.get(0).unwrap().q_max, 3);
+        assert_eq!(segments.get(2).unwrap().q_max, 14);
+    }
+
+    #[test]
+    fn calculate_batch_with_trades_correctly() {
+        let mut bids = vec![
+            Order::new(BigDecimal::from_str("112").unwrap(), 2),
+            Order::new(BigDecimal::from_str("111.76").unwrap(), 21),
+            Order::new(BigDecimal::from_str("111.45").unwrap(), 200),
+            Order::new(BigDecimal::from_str("111.35").unwrap(), 100),
+        ];
+
+        let mut asks = vec![
+            Order::new(BigDecimal::from_str("110").unwrap(), 2),
+            Order::new(BigDecimal::from_str("111.32").unwrap(), 21),
+            Order::new(BigDecimal::from_str("111.45").unwrap(), 100),
+            Order::new(BigDecimal::from_str("112.35").unwrap(), 100),
+        ];
+
+        if let BatchReport::Trade {
+            price,
+            qty,
+            cleared_bids,
+            cleared_asks,
+        } = calculate_batch(&mut bids, &mut asks)
+        {
+            assert_eq!(price, BigDecimal::from_str("111.45").unwrap());
+            assert_eq!(qty, 123);
+        } else {
+            panic!();
+        }
     }
 }
 
