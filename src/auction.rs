@@ -1,5 +1,5 @@
-use bigdecimal::BigDecimal;
-use std::cmp::{max, Ordering};
+use bigdecimal::{BigDecimal, FromPrimitive};
+use std::cmp::{max, min, Ordering};
 use std::collections::HashMap;
 
 type Qty = u32;
@@ -23,7 +23,7 @@ pub struct Order {
 }
 
 impl Order {
-    fn new(price: BigDecimal, qty: Qty) -> Order {
+    pub(crate) fn new(price: BigDecimal, qty: Qty) -> Order {
         Order {
             qty,
             price,
@@ -135,13 +135,11 @@ fn orders_to_curve_segments(orders: &[Order]) -> Vec<Segment> {
 * returns: p*, q*
 */
 fn intersect_demand_supply(demand: &[Segment], supply: &[Segment]) -> Option<(BigDecimal, Qty)> {
-    let mut curr_demand_i: usize = 0;
-    let mut curr_supply_i: usize = 0;
+    let mut idx_demand: usize = 0;
+    let mut idx_supply: usize = 0;
 
-    let mut demand_i: usize = 0;
-    let mut supply_i: usize = 0;
-
-    let mut q_star: Qty = 0;
+    let mut idx_next_demand: usize = 0;
+    let mut idx_next_supply: usize = 0;
 
     let size_demand: usize = demand.len();
     let size_supply: usize = supply.len();
@@ -152,51 +150,38 @@ fn intersect_demand_supply(demand: &[Segment], supply: &[Segment]) -> Option<(Bi
     }
 
     // no trades: highest bid is lower than the lowes ask
-    if demand[demand_i].price < supply[supply_i].price {
+    if demand[idx_demand].price < supply[idx_supply].price {
         return None;
     }
 
-    // find the max q* and segments it belongs to
-    for q in 0_u32.. {
-        let prev_bid_seg = &demand[demand_i];
-        let prev_ask_seg = &supply[supply_i];
+    let mut q_star: Qty = 0;
 
-        if q > prev_bid_seg.q_max {
-            // this q belongs to next bid segment
-            curr_demand_i += 1;
-        }
+    while idx_next_demand < size_demand && idx_next_supply < size_supply {
+        let seg_demand = &demand[idx_next_demand];
+        let seg_supply = &supply[idx_next_supply];
 
-        if q > prev_ask_seg.q_max {
-            // this q belongs to next ask segment
-            curr_supply_i += 1;
-        }
-
-        // the end of the curve.
-        if curr_demand_i >= size_demand || curr_supply_i >= size_supply {
-            break;
-        }
-
-        let curr_bid_seg = &demand[curr_demand_i];
-        let curr_ask_seg = &supply[curr_supply_i];
-
-        // check current segments prices
-        if curr_bid_seg.price < curr_ask_seg.price {
-            // intersection ended on previous q
+        //check price for this segments
+        if seg_supply.price > seg_demand.price {
             break;
         } else {
-            // no intersection or it's not the end. proceed with next segments
-            demand_i = curr_demand_i;
-            supply_i = curr_supply_i;
-            q_star = q;
+            // before intersection
+            idx_demand = idx_next_demand;
+            idx_supply = idx_next_supply;
+            // move along demand is it strictly shorter
+            if seg_demand.q_max < seg_supply.q_max {
+                idx_next_demand += 1;
+            } else {
+                // move along supply
+                idx_next_supply += 1;
+            }
         }
+
+        // q_star keeps the right edge
+        q_star = min(seg_demand.q_max, seg_supply.q_max);
     }
 
-    let bid_intersection_seg = &demand[demand_i];
-    let ask_intersection_seg = &supply[supply_i];
-
-    // get midpoint price
     Some((
-        (&bid_intersection_seg.price + &ask_intersection_seg.price) / 2,
+        (&demand[idx_demand].price + &supply[idx_supply].price) / 2,
         q_star,
     ))
 }
@@ -212,6 +197,7 @@ mod tests {
         Segment,
     };
     use bigdecimal::{BigDecimal, FromPrimitive};
+    use rand::Rng;
     use std::str::FromStr;
 
     #[test]
@@ -558,7 +544,25 @@ mod tests {
 }
 
 extern crate test;
+use rand::Rng;
+use std::str::FromStr;
 use test::Bencher;
 
 #[bench]
-fn foobar(b: &mut Bencher) {}
+fn batch(b: &mut Bencher) {
+    let mut rng = rand::thread_rng();
+
+    let mut bids: Vec<Order> = vec![];
+    let mut asks: Vec<Order> = vec![];
+
+    // pretty heterogeneous data
+    for _ in 0..125000 {
+        let random_price: f32 = rng.gen_range(140.0..150.0);
+        let random_qty: u32 = rng.gen_range(1..200);
+        let order = Order::new(BigDecimal::from_f32(random_price).unwrap().round(3), random_qty);
+        bids.push(order.clone());
+        asks.push(order.clone());
+    }
+
+    b.iter(|| calculate_batch(&mut bids, &mut asks))
+}
