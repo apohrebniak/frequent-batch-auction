@@ -152,7 +152,7 @@ async fn update_order_book(mut rx: UnboundedReceiver<Command>, book: Arc<DoubleS
             OrderType::Sell => match cmd.command_type {
                 CommandType::Add => book.asks.lock().unwrap().push(order),
                 CommandType::Cancel => book
-                    .bids
+                    .asks
                     .lock()
                     .unwrap()
                     .retain(|o| !(o.qty == order.qty && o.price == order.price)),
