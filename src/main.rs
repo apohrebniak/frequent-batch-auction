@@ -1,11 +1,13 @@
 #![feature(test)]
 
-use crate::auction::{calculate_batch, Order};
+use crate::auction::{calculate_batch, BatchReport, Order};
 use bigdecimal::{BigDecimal, FromPrimitive};
 use rand::Rng;
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::hash_map::RandomState;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use tokio::io;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -16,7 +18,19 @@ pub mod auction;
 
 const INTERVAL_MILLIS: u64 = 100;
 
-type OrderBook = Arc<Mutex<Vec<Order>>>; //TODO: changed to BTReeSet
+struct DoubleSidedBook {
+    bids: Mutex<Vec<Order>>,
+    asks: Mutex<Vec<Order>>,
+}
+
+impl DoubleSidedBook {
+    fn new() -> DoubleSidedBook {
+        DoubleSidedBook {
+            bids: Mutex::new(vec![]),
+            asks: Mutex::new(vec![]),
+        }
+    }
+}
 
 enum CommandType {
     Add,
@@ -85,15 +99,38 @@ impl CommandHandler {
     }
 }
 
-async fn run_auction(bid_book: OrderBook, ask_book: OrderBook) {
-    println!("tick")
+async fn run_auction(book: Arc<DoubleSidedBook>) {
+    let mut bid_lock = book.bids.lock().unwrap();
+    let mut ask_lock = book.asks.lock().unwrap();
+
+    let report = calculate_batch(&mut bid_lock, &mut ask_lock);
+
+    drop(bid_lock);
+    drop(ask_lock);
+
+    // run separate task, that will print to stdio
+    tokio::spawn(async move {
+        match report {
+            BatchReport::NoTrade => println!("No Trade"),
+            BatchReport::Trade {
+                price,
+                qty,
+                cleared_bids,
+                cleared_asks,
+            } => {
+                println!(
+                    "Batch: cleared BID={}, cleared ASK={}, price={:?}, qty={}",
+                    cleared_bids.len(),
+                    cleared_asks.len(),
+                    price,
+                    qty
+                );
+            }
+        }
+    });
 }
 
-async fn update_order_book(
-    mut rx: UnboundedReceiver<Command>,
-    bid_book: OrderBook,
-    ask_book: OrderBook,
-) {
+async fn update_order_book(mut rx: UnboundedReceiver<Command>, book: Arc<DoubleSidedBook>) {
     loop {
         let cmd = rx.recv().await.unwrap();
 
@@ -101,11 +138,11 @@ async fn update_order_book(
 
         match cmd.order_type {
             OrderType::Buy => match cmd.command_type {
-                CommandType::Add => bid_book.lock().unwrap().push(order),
+                CommandType::Add => {}
                 CommandType::Cancel => {}
             },
             OrderType::Sell => match cmd.command_type {
-                CommandType::Add => ask_book.lock().unwrap().push(order),
+                CommandType::Add => {}
                 CommandType::Cancel => {}
             },
         }
@@ -115,31 +152,25 @@ async fn update_order_book(
 #[tokio::main]
 async fn main() {
     // init order books
-    let bid_order_book: OrderBook = Arc::new(Mutex::new(Vec::new()));
-    let ask_order_book: OrderBook = Arc::new(Mutex::new(Vec::new()));
+    let book = Arc::new(DoubleSidedBook::new());
 
     // init channel
     // pipeline: socket -> channel -> order book
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
     //schedule periodic auction execution
-    let clone_bid_book: OrderBook = bid_order_book.clone();
-    let clone_ask_book: OrderBook = ask_order_book.clone();
+    let _book = book.clone();
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(INTERVAL_MILLIS));
         loop {
             interval.tick().await;
-            run_auction(clone_bid_book.clone(), clone_ask_book.clone()).await;
+            run_auction(_book.clone()).await;
         }
     });
 
     //init task for order book updates
     // channel -> order book
-    tokio::spawn(update_order_book(
-        rx,
-        bid_order_book.clone(),
-        ask_order_book.clone(),
-    ));
+    tokio::spawn(update_order_book(rx, book.clone()));
 
     let mut tcp_listener = TcpListener::bind("0.0.0.0:7777").await.unwrap();
 
