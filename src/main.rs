@@ -136,14 +136,26 @@ async fn update_order_book(mut rx: UnboundedReceiver<Command>, book: Arc<DoubleS
 
         let order = Order::new(cmd.price.clone(), cmd.qty);
 
+        /*
+        Come up with better non-blocking solution.
+        This implementation will lock current thread for the time auction is running
+         */
         match cmd.order_type {
             OrderType::Buy => match cmd.command_type {
-                CommandType::Add => {}
-                CommandType::Cancel => {}
+                CommandType::Add => book.bids.lock().unwrap().push(order),
+                CommandType::Cancel => book
+                    .bids
+                    .lock()
+                    .unwrap()
+                    .retain(|o| !(o.qty == order.qty && o.price == order.price)),
             },
             OrderType::Sell => match cmd.command_type {
-                CommandType::Add => {}
-                CommandType::Cancel => {}
+                CommandType::Add => book.asks.lock().unwrap().push(order),
+                CommandType::Cancel => book
+                    .bids
+                    .lock()
+                    .unwrap()
+                    .retain(|o| !(o.qty == order.qty && o.price == order.price)),
             },
         }
     }

@@ -16,8 +16,8 @@ pub enum BatchReport {
 
 #[derive(Clone)]
 pub struct Order {
-    qty: Qty,
-    price: BigDecimal,
+    pub qty: Qty,
+    pub price: BigDecimal,
     batches_out: u16,
     cleared: bool,
 }
