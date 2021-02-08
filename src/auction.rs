@@ -41,7 +41,6 @@ struct Segment {
 pub fn calculate_batch(bids: &mut Vec<Order>, asks: &mut Vec<Order>) -> BatchReport {
     // sort bids. price high -> low, batches_out desc
     bids.sort_unstable_by(|order, other| {
-        //TODO: try another sort
         match order.price.cmp(&other.price) {
             Ordering::Equal => order.batches_out.cmp(&other.batches_out).reverse(), // old orders have priority
             x => x.reverse(), // high price has priority
@@ -132,7 +131,7 @@ fn orders_to_curve_segments(orders: &[Order]) -> Vec<Segment> {
 }
 
 /**
-* params: sorted curve's segmetns
+* params: sorted curve's segments
 * returns: p*, q*
 */
 fn intersect_demand_supply(demand: &[Segment], supply: &[Segment]) -> Option<(BigDecimal, Qty)> {
@@ -168,7 +167,7 @@ fn intersect_demand_supply(demand: &[Segment], supply: &[Segment]) -> Option<(Bi
             // before intersection
             idx_demand = idx_next_demand;
             idx_supply = idx_next_supply;
-            // move along demand is it strictly shorter
+            // move along demand if it's strictly shorter
             if seg_demand.q_max < seg_supply.q_max {
                 idx_next_demand += 1;
             } else {
@@ -185,10 +184,6 @@ fn intersect_demand_supply(demand: &[Segment], supply: &[Segment]) -> Option<(Bi
         (&demand[idx_demand].price + &supply[idx_supply].price) / 2,
         q_star,
     ))
-}
-
-fn main() {
-    println!("Hello, world!");
 }
 
 #[cfg(test)]
