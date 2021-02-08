@@ -41,6 +41,7 @@ struct Segment {
 pub fn calculate_batch(bids: &mut Vec<Order>, asks: &mut Vec<Order>) -> BatchReport {
     // sort bids. price high -> low, batches_out desc
     bids.sort_unstable_by(|order, other| {
+        //TODO: try another sort
         match order.price.cmp(&other.price) {
             Ordering::Equal => order.batches_out.cmp(&other.batches_out).reverse(), // old orders have priority
             x => x.reverse(), // high price has priority
@@ -559,7 +560,10 @@ fn batch(b: &mut Bencher) {
     for _ in 0..125000 {
         let random_price: f32 = rng.gen_range(140.0..150.0);
         let random_qty: u32 = rng.gen_range(1..200);
-        let order = Order::new(BigDecimal::from_f32(random_price).unwrap().round(3), random_qty);
+        let order = Order::new(
+            BigDecimal::from_f32(random_price).unwrap().round(3),
+            random_qty,
+        );
         bids.push(order.clone());
         asks.push(order.clone());
     }
